@@ -1,51 +1,86 @@
 #include "command.hpp"
 #include "driver.hpp"
-#include <fcntl.h>
+#include <chrono>
+#include <cstdlib>
 #include <fstream>
-#include <iostream>
-#include <sys/wait.h>
+#include <glob.h>
 #include <unordered_map>
 
-// handle SIGINT
-void sigint_handler([[maybe_unused]] int sig) { std::cout << std::endl; }
-void sigchld_handler(int sig) {
-  // handle SIGCHLD ( print process pid, status, and exit code)
-
-  auto time =
-      std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-  auto file = std::ofstream("log.txt", ios::app);
-  file << time << "Child Process exited with status " << WEXITSTATUS(sig)
-       << std::endl;
-  file.close();
-}
+namespace fs = std::filesystem;
 
 [[noreturn]] int main() {
   signal(SIGINT, sigint_handler);
   signal(SIGCHLD, sigchld_handler);
+
   while (true) {
     auto driver = cmd::driver();
-    std::cout << "kirosh> ";
+    cout << prompt();
     driver.parse();
   }
 }
 
-namespace cmd {
-using pipe_t = int;
+void sigint_handler(int) { std::cout << std::endl; }
 
-vector<filesystem::path> glob(string pattern) {
-  // * --> [^/]*
-  // ** --> .*
-  // ? --> [^/]
-  // [.*] --> [.*]
+void sigchld_handler(int) {
+  int status;
+  pid_t pid;
 
-  // get all files in the directory
-  // check if the file matches the pattern
-  // if it does, add it to the list
-
-  filesystem::path path = pattern;
-  filesystem::path dir = path.parent_path();
-  return {};
+  // Reap all child processes
+  // loop because multiple children can terminate with one SIGCHLD
+  while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+    log(pid, status);
+  }
 }
+
+string prompt() {
+  auto wd = fs::current_path().string();
+  // replace home directory with ~
+
+  if (getenv("HOME") && wd.starts_with(fs::path(getenv("HOME")).string()))
+    wd.replace(0, fs::path(getenv("HOME")).string().size(), "~");
+
+  return wd + " $ ";
+}
+/// wrapper around glob(3) function
+std::vector<fs::path> glob(const fs::path &pattern) {
+  std::vector<fs::path> paths;
+  glob_t glob_result;
+
+  int status = glob(pattern.c_str(), GLOB_TILDE, nullptr, &glob_result);
+
+  if (status != 0) {
+    globfree(&glob_result);
+    return paths;
+  }
+
+  for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
+    // copy strings to prevent dangling pointers
+    auto str = std::string(glob_result.gl_pathv[i]);
+    paths.push_back(fs::path(str));
+  }
+
+  globfree(&glob_result);
+  return paths;
+}
+
+/// log child process termination to log.txt
+void log(pid_t pid, int status) {
+
+  auto file = std::ofstream("log.txt", ios::app);
+
+  auto time = std::chrono::system_clock::now();
+  auto time_fmt = std::format("{:%Y-%m-%d %H:%M:%S}", time);
+  if (WIFEXITED(status)) {
+    file << "[ " << time_fmt << "] " << "Child process " << pid
+         << " exited with status " << WEXITSTATUS(status) << std::endl;
+  } else if (WIFSIGNALED(status)) {
+    file << "[ " << time_fmt << "] " << "Child process " << pid
+         << " was terminated by signal " << WTERMSIG(status) << std::endl;
+  }
+  file.close();
+}
+
+namespace cmd {
 
 int driver::parse() {
   auto parser = yy::parser(*this);
@@ -145,6 +180,7 @@ int SimpleCommand::execute(ExecMode exec_mode) {
     if (exec_mode == ExecMode::ASYNC) return 0;
     waitpid(pid, &status, 0);
     if (WIFEXITED(status)) status = WEXITSTATUS(status);
+    log(pid, status);
 
   } else {
     // fork failed
@@ -158,7 +194,6 @@ int SimpleCommand::execute(ExecMode exec_mode) {
 int Pipeline::execute() {
   if (_pipeline.empty()) return 0;
   if (_pipeline.size() == 1) return _pipeline.front().execute(_exec_mode);
-  std::cout << "here";
 
   int status = 0;
   int file_desc[2]; // file descriptors for pipe [0] read, [1] write
@@ -213,32 +248,4 @@ int CommandList::execute() {
 
   return status;
 }
-
-// For debug printing
-std::ostream &operator<<(std::ostream &os, const SimpleCommand &cmd) {
-  os << cmd._cmd;
-  for (const auto &arg : cmd._args)
-    os << " '" << arg << "'";
-  return os;
-}
-
-std::ostream &operator<<(std::ostream &os, const Pipeline &pipe) {
-  if (pipe._pipeline.empty()) return os;
-
-  os << pipe._pipeline[0];
-  for (auto i = pipe._pipeline.begin() + 1; i != pipe._pipeline.end(); ++i)
-    os << "|" << (pipe._exec_mode == ExecMode::ASYNC ? " &" : " ;");
-  return os;
-}
-
-std::ostream &operator<<(std::ostream &os, const CommandList &cmd) {
-  if (cmd._commands.empty()) return os;
-  os << cmd._commands[0];
-  for (auto i = cmd._commands.begin() + 1; i != cmd._commands.end(); ++i) {
-    const auto &pipeline = *i;
-    os << ", " << pipeline;
-  }
-  return os;
-}
-
 } // namespace cmd

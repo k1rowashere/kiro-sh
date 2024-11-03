@@ -2,7 +2,9 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <iostream>
+#include <linux/limits.h>
 #include <string>
+#include <sys/wait.h>
 #include <variant>
 #include <vector>
 
@@ -10,7 +12,14 @@ using namespace std;
 
 // TODO: add docs
 
+void sigint_handler(int);
+void sigchld_handler(int);
+std::string prompt();
+std::vector<filesystem::path> glob(const filesystem::path &pattern);
+void log(pid_t pid, int status);
+
 namespace cmd {
+
 class SimpleCommand;
 class Pipeline;
 class CommandList;
@@ -62,7 +71,7 @@ public:
   void apply();
 };
 
-struct SimpleCommand {
+class SimpleCommand {
 private:
   string _cmd;
   vector<string> _args;
@@ -72,7 +81,16 @@ private:
   int builtin();
 
 public:
-  void push_arg(const string &arg) { _args.push_back(arg); }
+  void push_arg(const string &arg) {
+    // globbing:
+    auto paths = glob(arg);
+    if (!paths.empty()) {
+      for (const auto &path : paths)
+        _args.push_back(path.string());
+      return;
+    }
+    _args.push_back(arg);
+  }
   void set_cmd(const string &cmd) { _cmd = cmd; }
 
   void push_redirect(Redirect &&redirect) { _redirs.push_back(redirect); }
@@ -111,7 +129,5 @@ public:
   int execute();
   friend std::ostream &operator<<(std::ostream &os, const CommandList &cmd);
 };
-
-vector<filesystem::path> glob(string pattern);
 
 } // namespace cmd

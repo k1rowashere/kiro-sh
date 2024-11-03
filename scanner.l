@@ -51,6 +51,7 @@ nsep    [^ \t\n\(\)\{\}\|&;<>]
 "&&"    return yy::parser::make_AND(); 
 "&"     return yy::parser::make_AMPERSAND(); 
 ";"     return yy::parser::make_SEMICOL(); 
+"\""    return yy::parser::make_QUOTE(); 
 <<EOF>> return yy::parser::make_END(); 
 \n      return yy::parser::make_EOL(); 
 

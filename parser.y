@@ -31,7 +31,6 @@
 %define parse.lac full
 
 %param {cmd::driver& drv}
-%printer { yyo << $$; } <*>;
 
 %token <std::string> WORD
 %token <int> REDIRECT_IN        "<"
@@ -40,6 +39,7 @@
 %token 
     REDIRECT_APPEND_ERR "&>>"
     REDIRECT_OUT_ERR    "&>"
+    QUOTE       "\""
     PIPE        "|"
     PIPE_ERR    "|&"
     LPAREN      "("
@@ -65,46 +65,41 @@
 
 goal: command_list EOL { return $1.execute(); } 
     | END { exit(0); }
+    | EOL { return 0;}
+    | "^C" { return 0; }
     ;
 
 simple_command:
     WORD {
-        // cout << "Command: " << $1 << endl;
         $$ = cmd::SimpleCommand();
         $$.set_cmd($1);
     }
     | simple_command WORD {
-        // cout << "+ arg: " << $2 << endl;
         $1.push_arg($2);
         $$ = $1;
     }
     | simple_command REDIRECT_IN WORD {
-        // cout << "+ redirect in: " << $3 << endl;
         int flags = O_RDONLY;
         $1.push_redirect(cmd::Redirect($2, $3, flags));
         $$ = $1;
     }
     | simple_command REDIRECT_OUT WORD {
-        // cout << "+ redirect out: " << $3 << endl;
         int flags = O_WRONLY | O_CREAT;
         $1.push_redirect(cmd::Redirect($2, $3, flags));
         $$ = $1;
     }
     | simple_command REDIRECT_APPEND WORD {
-        // cout << "+ redirect append: " << $3 << endl;
         int flags =  O_WRONLY | O_APPEND | O_CREAT;
         $1.push_redirect(cmd::Redirect($2, $3, flags));
         $$ = $1;
     }
     | simple_command REDIRECT_OUT_ERR WORD {
-        // cout << "+ redirect out err: " << $3 << endl;
         int flags = O_WRONLY | O_CREAT;
         $1.push_redirect(cmd::Redirect(STDOUT_FILENO, $3, flags));
         $1.push_redirect(cmd::Redirect(STDERR_FILENO, $3, flags));
         $$ = $1;    
     }
     | simple_command REDIRECT_APPEND_ERR WORD {
-        // cout << "+ redirect append err: " << $3 << endl;
         int flags = O_WRONLY | O_APPEND | O_CREAT;
         $1.push_redirect(cmd::Redirect(STDOUT_FILENO, $3, flags));
         $1.push_redirect(cmd::Redirect(STDERR_FILENO, $3, flags));
@@ -114,17 +109,14 @@ simple_command:
 
 pipeline:
     simple_command {
-        // cout << "Pipeline: " << $1 << endl;
         $$ = cmd::Pipeline();
         $$.push_back($1);
     }
     | pipeline PIPE simple_command {
-        // cout << "+ cmd to pipe: " << $1 << " | " << $3 << endl;
         $1.push_back($3);
         $$ = $1;
     }
     | pipeline PIPE_ERR simple_command {
-        // cout << "+ cmd to pipe err: " << $1 << " |& " << $3 << endl;
         $3.push_redirect(cmd::Redirect(STDERR_FILENO, STDOUT_FILENO));
         $1.push_back($3);
         $$ = $1;
@@ -133,7 +125,6 @@ pipeline:
 
 command_list:
     pipeline {
-        // cout << "CommandList: " << $1 << endl;
         $$ = cmd::CommandList($1);
     }
     | command_list SEMICOL pipeline {
