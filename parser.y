@@ -8,7 +8,7 @@
     #include <sys/wait.h>
 
     namespace cmd {
-        class SimpleCommand;
+        class Command;
         class Pipeline;
         class CommandList;
         class driver;
@@ -53,7 +53,7 @@
 ;
 
 
-%type <cmd::SimpleCommand> simple_command
+%type <cmd::Command> command
 %type <cmd::Pipeline> pipeline
 %type <cmd::CommandList> command_list
 
@@ -69,37 +69,37 @@ goal: command_list EOL { return $1.execute(); }
     | "^C" { return 0; }
     ;
 
-simple_command:
+command:
     WORD {
-        $$ = cmd::SimpleCommand();
+        $$ = cmd::Command();
         $$.set_cmd($1);
     }
-    | simple_command WORD {
+    | command WORD {
         $1.push_arg($2);
         $$ = $1;
     }
-    | simple_command REDIRECT_IN WORD {
+    | command REDIRECT_IN WORD {
         int flags = O_RDONLY;
         $1.push_redirect(cmd::Redirect($2, $3, flags));
         $$ = $1;
     }
-    | simple_command REDIRECT_OUT WORD {
+    | command REDIRECT_OUT WORD {
         int flags = O_WRONLY | O_CREAT;
         $1.push_redirect(cmd::Redirect($2, $3, flags));
         $$ = $1;
     }
-    | simple_command REDIRECT_APPEND WORD {
+    | command REDIRECT_APPEND WORD {
         int flags =  O_WRONLY | O_APPEND | O_CREAT;
         $1.push_redirect(cmd::Redirect($2, $3, flags));
         $$ = $1;
     }
-    | simple_command REDIRECT_OUT_ERR WORD {
+    | command REDIRECT_OUT_ERR WORD {
         int flags = O_WRONLY | O_CREAT;
         $1.push_redirect(cmd::Redirect(STDOUT_FILENO, $3, flags));
         $1.push_redirect(cmd::Redirect(STDERR_FILENO, $3, flags));
         $$ = $1;    
     }
-    | simple_command REDIRECT_APPEND_ERR WORD {
+    | command REDIRECT_APPEND_ERR WORD {
         int flags = O_WRONLY | O_APPEND | O_CREAT;
         $1.push_redirect(cmd::Redirect(STDOUT_FILENO, $3, flags));
         $1.push_redirect(cmd::Redirect(STDERR_FILENO, $3, flags));
@@ -108,15 +108,15 @@ simple_command:
     ;
 
 pipeline:
-    simple_command {
+    command {
         $$ = cmd::Pipeline();
         $$.push_back($1);
     }
-    | pipeline PIPE simple_command {
+    | pipeline PIPE command {
         $1.push_back($3);
         $$ = $1;
     }
-    | pipeline PIPE_ERR simple_command {
+    | pipeline PIPE_ERR command {
         $3.push_redirect(cmd::Redirect(STDERR_FILENO, STDOUT_FILENO));
         $1.push_back($3);
         $$ = $1;

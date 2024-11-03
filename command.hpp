@@ -1,10 +1,10 @@
 #pragma once
+#include <deque>
 #include <fcntl.h>
 #include <filesystem>
-#include <iostream>
-#include <linux/limits.h>
 #include <string>
 #include <sys/wait.h>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -20,13 +20,13 @@ void log(pid_t pid, int status);
 
 namespace cmd {
 
-class SimpleCommand;
+class Command;
 class Pipeline;
 class CommandList;
 
 // TODO: use variants for Executable and Argument to allow recursive parsing
-using Executable = std::variant<SimpleCommand, Pipeline, CommandList>;
-using FileDescr = int;
+using Executable = std::variant<Command, Pipeline, CommandList>;
+using FileDescriptor = int;
 using Argument = std::variant<string, Executable>;
 
 enum class JoinMode {
@@ -51,34 +51,36 @@ Builtin get_builtin(const string &cmd);
 
 struct Redirect {
 private:
-  FileDescr src_fd;
+  FileDescriptor src_fd;
   string dest_filename;
-  FileDescr dest_fd;
+  FileDescriptor dest_fd;
   int _file_flags;
   bool _duplicate = true;
 
   enum { FD, FILENAME } type;
 
 public:
-  Redirect(FileDescr src_fd, string dest_filename,
+  Redirect(FileDescriptor src_fd, string dest_filename,
            int flags = O_CREAT | O_WRONLY, bool duplicate = true)
-      : src_fd(src_fd), dest_filename(dest_filename), _file_flags(flags),
-        _duplicate(duplicate), type(FILENAME) {}
+      : src_fd(src_fd), dest_filename(std::move(dest_filename)), dest_fd(0),
+        _file_flags(flags), _duplicate(duplicate), type(FILENAME) {}
 
-  Redirect(FileDescr src_fd, FileDescr dest_fd, bool duplicate = true)
-      : src_fd(src_fd), dest_fd(dest_fd), _duplicate(duplicate), type(FD) {}
+  Redirect(FileDescriptor src_fd, const FileDescriptor dest_fd,
+           bool duplicate = true)
+      : src_fd(src_fd), dest_fd(dest_fd), _file_flags(0), _duplicate(duplicate),
+        type(FD) {}
 
-  void apply();
+  void apply() const;
 };
 
-class SimpleCommand {
+class Command {
 private:
   string _cmd;
   vector<string> _args;
-  vector<Redirect> _redirs;
+  deque<Redirect> _redirects;
   bool _append = false;
 
-  int builtin();
+  [[nodiscard]] int builtin() const;
 
 public:
   void push_arg(const string &arg) {
@@ -93,20 +95,23 @@ public:
   }
   void set_cmd(const string &cmd) { _cmd = cmd; }
 
-  void push_redirect(Redirect &&redirect) { _redirs.push_back(redirect); }
+  void push_redirect(Redirect &&redirect) { _redirects.push_back(redirect); }
+  void push_front_redirect(Redirect &&redirect) {
+    _redirects.push_front(redirect);
+  }
 
-  int execute(ExecMode exec_mode = ExecMode::SYNC);
+  [[nodiscard]] int execute(ExecMode exec_mode = ExecMode::SYNC) const;
 
-  friend std::ostream &operator<<(std::ostream &os, const SimpleCommand &cmd);
+  friend std::ostream &operator<<(std::ostream &os, const Command &cmd);
 };
 
 class Pipeline {
-  vector<SimpleCommand> _pipeline;
+  vector<Command> _pipeline;
   ExecMode _exec_mode = ExecMode::SYNC;
 
 public:
   void set_async() { _exec_mode = ExecMode::ASYNC; }
-  void push_back(const SimpleCommand &cmd) { _pipeline.push_back(cmd); }
+  void push_back(const Command &cmd) { _pipeline.push_back(cmd); }
   int execute();
 
   friend std::ostream &operator<<(std::ostream &os, const Pipeline &pipe);
@@ -117,8 +122,8 @@ class CommandList {
   vector<JoinMode> _joins;
 
 public:
-  CommandList() {};
-  CommandList(Pipeline pipe) { _commands.push_back(pipe); }
+  CommandList() = default;
+  explicit CommandList(const Pipeline &pipe) { _commands.push_back(pipe); }
 
   void push_back(const Pipeline &cmd, JoinMode mode) {
     _commands.push_back(cmd);

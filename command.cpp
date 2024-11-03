@@ -56,7 +56,7 @@ std::vector<fs::path> glob(const fs::path &pattern) {
   for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
     // copy strings to prevent dangling pointers
     auto str = std::string(glob_result.gl_pathv[i]);
-    paths.push_back(fs::path(str));
+    paths.emplace_back(str);
   }
 
   globfree(&glob_result);
@@ -87,7 +87,7 @@ int driver::parse() {
   return parser.parse();
 }
 
-void Redirect::apply() {
+void Redirect::apply() const {
   switch (type) {
   case FD:
     if (_duplicate)
@@ -116,11 +116,11 @@ Builtin get_builtin(const string &cmd) {
       {"pwd", Builtin::PWD},
   };
 
-  if (builtins.find(cmd) != builtins.end()) return builtins[cmd];
+  if (builtins.contains(cmd)) return builtins[cmd];
   return Builtin::NONE;
 }
 
-int SimpleCommand::builtin() {
+int Command::builtin() const {
   // TODO: handle redirections for built-in commands
   switch (get_builtin(_cmd)) {
   case Builtin::CD:
@@ -144,7 +144,7 @@ int SimpleCommand::builtin() {
   }
 }
 
-int SimpleCommand::execute(ExecMode exec_mode) {
+int Command::execute(ExecMode exec_mode) const {
   // handle built-in commands
   int status = this->builtin();
   if (status != -1) return status;
@@ -165,7 +165,7 @@ int SimpleCommand::execute(ExecMode exec_mode) {
     // child process
 
     // redirect I/O
-    for (auto &redirect : _redirs)
+    for (auto &redirect : _redirects)
       redirect.apply();
 
     // Execute command
@@ -196,11 +196,11 @@ int Pipeline::execute() {
   if (_pipeline.size() == 1) return _pipeline.front().execute(_exec_mode);
 
   int status = 0;
-  int file_desc[2]; // file descriptors for pipe [0] read, [1] write
   int prev_file_desc = -1;
 
   // execute all commands in pipeline except the last one
   for (auto i = _pipeline.begin(); i != _pipeline.end() - 1; ++i) {
+    FileDescriptor file_desc[2];
     // create pipe
     if (pipe(file_desc) == -1) {
       std::cerr << "pipe";
@@ -213,20 +213,19 @@ int Pipeline::execute() {
     i->push_redirect(Redirect(STDOUT_FILENO, file_desc[1]));
     prev_file_desc = file_desc[0];
 
-    i->execute(ExecMode::ASYNC);
+    status = i->execute(ExecMode::ASYNC);
 
     // close write end of pipe
     // read end will be closed by the next command
     close(file_desc[1]);
   }
   // execute last command in pipeline
-  _pipeline.back().push_redirect(Redirect(STDIN_FILENO, prev_file_desc));
-  _pipeline.back().execute(_exec_mode);
+  _pipeline.back().push_front_redirect(Redirect(STDIN_FILENO, prev_file_desc));
+  status = _pipeline.back().execute(_exec_mode);
 
   // wait for all commands to finish
   if (_exec_mode == ExecMode::SYNC) {
     for (size_t i = 0; i < _pipeline.size(); ++i) {
-      int status;
       waitpid(-1, &status, 0);
       if (WIFEXITED(status)) status = WEXITSTATUS(status);
     }
